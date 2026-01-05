@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Barber Pro Tracker - Fixed</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <style>
+        :root { --primary: #2c3e50; --success: #27ae60; --danger: #e74c3c; --warning: #f39c12; --light: #ecf0f1; --edit: #3498db; }
+        body { font-family: 'Helvetica Neue', sans-serif; background-color: #f0f2f5; padding: 15px; }
+        .container { max-width: 650px; margin: auto; background: white; padding: 25px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        h2 { text-align: center; color: var(--primary); }
+        .input-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #ddd; box-sizing: border-box; font-size: 16px; }
+        .button-group { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+        .btn { padding: 15px; border-radius: 8px; font-size: 16px; border: none; cursor: pointer; font-weight: bold; color: white; }
+        .btn-save { background-color: var(--success); }
+        .btn-holiday { background-color: var(--danger); }
+        .btn-export { background-color: var(--primary); width: 100%; margin-top: 20px; }
+        .summary-card { background: var(--primary); color: white; padding: 20px; border-radius: 12px; margin: 25px 0; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .summary-item { text-align: center; }
+        .summary-item.full { grid-column: span 2; border-bottom: 1px solid #ffffff33; padding-bottom: 10px; }
+        .table-header { display: flex; justify-content: space-between; align-items: center; margin-top: 20px; }
+        .btn-sort { background: var(--light); color: var(--primary); border: 1px solid #ccc; padding: 5px 10px; border-radius: 5px; cursor: pointer; font-size: 12px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; }
+        th, td { padding: 10px; text-align: left; border-bottom: 1px solid #eee; }
+        .actions { display: flex; gap: 5px; }
+        .btn-action { padding: 5px 8px; border-radius: 4px; border: none; color: white; cursor: pointer; font-size: 12px; }
+        .btn-edit { background-color: var(--edit); }
+        .btn-del { background-color: var(--danger); }
+        .status-holiday { color: var(--danger); font-weight: bold; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2 id="formTitle">บันทึกรายได้ร้านตัดผม</h2>
+    <input type="hidden" id="editIndex" value="-1">
+    
+    <div class="input-group">
+        <label>วันที่</label>
+        <input type="date" id="date">
+    </div>
+
+    <div id="incomeFields">
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+            <div class="input-group"><label>เงินสด</label><input type="number" id="cash" placeholder="0"></div>
+            <div class="input-group"><label>เงินโอน</label><input type="number" id="transfer" placeholder="0"></div>
+        </div>
+        <div class="input-group"><label>ทิป</label><input type="number" id="tip" placeholder="0"></div>
+    </div>
+    
+    <div class="button-group" id="normalButtons">
+        <button class="btn btn-save" onclick="saveData(false)">บันทึกยอด</button>
+        <button class="btn btn-holiday" onclick="saveData(true)">วันหยุดร้าน</button>
+    </div>
+    
+    <div id="editButtons" style="display: none; gap: 10px; margin-top: 10px;">
+        <button class="btn btn-save" style="flex: 2;" onclick="updateData()">บันทึกการแก้ไข</button>
+        <button class="btn btn-holiday" style="flex: 1; background-color: #7f8c8d;" onclick="cancelEdit()">ยกเลิก</button>
+    </div>
+
+    <div class="summary-card">
+        <div class="summary-item full"><span>รายได้รวมเดือนนี้</span> <strong id="totalRevenue">0</strong></div>
+        <div class="summary-item"><span>เงินสด</span> <strong id="totalCash">0</strong></div>
+        <div class="summary-item"><span>เงินโอน</span> <strong id="totalTransfer">0</strong></div>
+    </div>
+
+    <button class="btn btn-export" onclick="exportToExcel()">📥 ดาวน์โหลด Excel (เฉพาะเดือนนี้)</button>
+
+    <div class="table-header">
+        <h3>ประวัติ</h3>
+        <button class="btn-sort" onclick="toggleSort()">🔄 เรียงตาม: <span id="sortText">ใหม่ไปเก่า</span></button>
+    </div>
+    <table id="recordTable">
+        <thead><tr><th>วันที่</th><th>ยอด/สถานะ</th><th>ทิป</th><th>จัดการ</th></tr></thead>
+        <tbody></tbody>
+    </table>
+</div>
+
+<script>
+    // --- ตั้งค่าเริ่มต้น ---
+    document.getElementById('date').valueAsDate = new Date();
+    let isNewestFirst = true;
+
+    // --- ฟังก์ชันจัดการข้อมูล (CRUD) ---
+    function getRecords() {
+        try {
+            return JSON.parse(localStorage.getItem('barberFinalRecords')) || [];
+        } catch (e) {
+            return [];
+        }
+    }
+
+    function saveToStorage(records) {
+        localStorage.setItem('barberFinalRecords', JSON.stringify(records));
+    }
+
+    function saveData(isHoliday) {
+        const date = document.getElementById('date').value;
+        if(!date) { alert("กรุณาเลือกวันที่"); return; }
+
+        const cash = isHoliday ? 0 : (parseFloat(document.getElementById('cash').value) || 0);
+        const transfer = isHoliday ? 0 : (parseFloat(document.getElementById('transfer').value) || 0);
+        const tip = isHoliday ? 0 : (parseFloat(document.getElementById('tip').value) || 0);
+
+        let records = getRecords();
+        const newRecord = {
+            id: Date.now(), // ใช้ Timestamp เป็น Unique ID
+            date, 
+            cash, 
+            transfer, 
+            tip, 
+            isHoliday 
+        };
+
+        records.push(newRecord);
+        saveToStorage(records);
+        clearInputs();
+        renderData();
+    }
+
+    function updateData() {
+        const id = parseInt(document.getElementById('editIndex').value);
+        let records = getRecords();
+        const index = records.findIndex(r => r.id === id);
+        
+        if (index !== -1) {
+            records[index] = {
+                ...records[index], // รักษา ID เดิมไว้
+                date: document.getElementById('date').value,
+                cash: parseFloat(document.getElementById('cash').value) || 0,
+                transfer: parseFloat(document.getElementById('transfer').value) || 0,
+                tip: parseFloat(document.getElementById('tip').value) || 0,
+                isHoliday: false
+            };
+            saveToStorage(records);
+            cancelEdit();
+            renderData();
+        }
+    }
+
+    function deleteRecord(id) {
+        if(confirm("คุณแน่ใจหรือไม่ว่าต้องการลบรายการนี้?")) {
+            let records = getRecords();
+            records = records.filter(r => r.id !== id);
+            saveToStorage(records);
+            renderData();
+        }
+    }
+
+    // --- ฟังก์ชันจัดการ UI ---
+    function editRecord(id) {
+        const records = getRecords();
+        const record = records.find(r => r.id === id);
+        if(!record) return;
+
+        document.getElementById('date').value = record.date;
+        document.getElementById('cash').value = record.cash;
+        document.getElementById('transfer').value = record.transfer;
+        document.getElementById('tip').value = record.tip;
+        document.getElementById('editIndex').value = id;
+
+        document.getElementById('formTitle').innerText = "แก้ไขข้อมูลรายได้";
+        document.getElementById('normalButtons').style.display = 'none';
+        document.getElementById('editButtons').style.display = 'flex';
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    function cancelEdit() {
+        document.getElementById('editIndex').value = "-1";
+        document.getElementById('formTitle').innerText = "บันทึกรายได้ร้านตัดผม";
+        document.getElementById('normalButtons').style.display = 'grid';
+        document.getElementById('editButtons').style.display = 'none';
+        clearInputs();
+    }
+
+    function clearInputs() {
+        document.getElementById('cash').value = '';
+        document.getElementById('transfer').value = '';
+        document.getElementById('tip').value = '';
+        document.getElementById('date').valueAsDate = new Date();
+    }
+
+    function toggleSort() {
+        isNewestFirst = !isNewestFirst;
+        document.getElementById('sortText').innerText = isNewestFirst ? "ใหม่ไปเก่า" : "เก่าไปใหม่";
+        renderData();
+    }
+
+    function renderData() {
+        const records = getRecords();
+        const tbody = document.querySelector('#recordTable tbody');
+        const now = new Date();
+        const currentMonth = now.getMonth();
+        const currentYear = now.getFullYear();
+
+        let mTotal = 0, mCash = 0, mTransfer = 0;
+
+        // คัดกรองและคำนวณยอดเฉพาะเดือนปัจจุบัน
+        records.forEach(item => {
+            const d = new Date(item.date);
+            if (d.getMonth() === currentMonth && d.getFullYear() === currentYear) {
+                mCash += item.cash;
+                mTransfer += item.transfer;
+                mTotal += (item.cash + item.transfer);
+            }
+        });
+
+        // เรียงลำดับสำหรับการแสดงผลในตาราง
+        const displayRecords = [...records].sort((a, b) => {
+            return isNewestFirst ? new Date(b.date) - new Date(a.date) : new Date(a.date) - new Date(b.date);
+        });
+
+        tbody.innerHTML = '';
+        displayRecords.forEach(item => {
+            const statusText = item.isHoliday ? 
+                '<span class="status-holiday">วันหยุด</span>' : 
+                (item.cash + item.transfer).toLocaleString();
+            
+            const row = `
+                <tr>
+                    <td>${item.date}</td>
+                    <td>${statusText}</td>
+                    <td>${(item.tip || 0).toLocaleString()}</td>
+                    <td>
+                        <div class="actions">
+                            <button class="btn-action btn-edit" onclick="editRecord(${item.id})">แก้</button>
+                            <button class="btn-action btn-del" onclick="deleteRecord(${item.id})">ลบ</button>
+                        </div>
+                    </td>
+                </tr>`;
+            tbody.insertAdjacentHTML('beforeend', row);
+        });
+
+        // อัปเดตตัวเลขใน Card
+        document.getElementById('totalRevenue').innerText = mTotal.toLocaleString() + ' บาท';
+        document.getElementById('totalCash').innerText = mCash.toLocaleString();
+        document.getElementById('totalTransfer').innerText = mTransfer.toLocaleString();
+    }
+
+    function exportToExcel() {
+        const records = getRecords();
+        const now = new Date();
+        const monthlyData = records
+            .filter(r => {
+                const d = new Date(r.date);
+                return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+            })
+            .map(r => ({
+                'วันที่': r.date,
+                'สถานะ': r.isHoliday ? 'วันหยุด' : 'เปิดร้าน',
+                'เงินสด': r.cash,
+                'เงินโอน': r.transfer,
+                'ทิป': r.tip,
+                'รวมรายได้': r.cash + r.transfer
+            }));
+
+        if(monthlyData.length === 0) { alert("ไม่มีข้อมูลของเดือนนี้ให้ส่งออก"); return; }
+
+        const ws = XLSX.utils.json_to_sheet(monthlyData);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "รายได้");
+        XLSX.writeFile(wb, `Barber_Report_${now.getMonth()+1}_${now.getFullYear()}.xlsx`);
+    }
+
+    // รันครั้งแรกเมื่อโหลดหน้า
+    renderData();
+</script>
+
+</body>
+</html>
